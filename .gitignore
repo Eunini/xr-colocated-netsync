@@ -1,0 +1,7 @@
+bin/
+obj/
+viewer/frames/
+viewer/trace.json
+viewer/*.mp4
+out/
+viewer/node_modules

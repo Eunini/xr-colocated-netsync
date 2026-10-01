@@ -1,0 +1,339 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Colocated MR avatar sync, 32 players</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #0b0f14; color: #e6edf3; font: 14px/1.35 "DejaVu Sans", Arial, sans-serif; }
+  #stage { position: relative; width: 1280px; height: 720px; overflow: hidden; background: #0b0f14; }
+  #gl { position: absolute; left: 0; top: 0; }
+  .bar { position: absolute; left: 0; right: 0; top: 0; height: 46px; display: flex; align-items: center; padding: 0 16px; gap: 14px; background: #111821; border-bottom: 1px solid #223; }
+  .bar h1 { font-size: 16px; white-space: nowrap; margin: 0; font-weight: 700; letter-spacing: .2px; }
+  .bar .sim { font-size: 11.5px; color: #8b98a5; white-space: nowrap; }
+  .phase { margin-left: auto; white-space: nowrap; padding: 4px 12px; border-radius: 14px; font-weight: 700; font-size: 13px; background: #1f6f43; }
+  .phase.busy { background: #9a6a00; } .phase.burst { background: #a8322d; }
+  .clock { font-variant-numeric: tabular-nums; color: #8b98a5; width: 70px; text-align: right; white-space: nowrap; }
+  .panel { position: absolute; top: 52px; width: 628px; height: 384px; border-radius: 6px; overflow: hidden; border: 2px solid #333; }
+  .panel.a { left: 8px; border-color: #c2413b; } .panel.b { left: 644px; border-color: #2fa36b; }
+  .ptitle { position: absolute; left: 0; right: 0; top: 0; padding: 6px 10px; background: rgba(8,12,16,.78); font-size: 13px; }
+  .ptitle b { font-size: 15px; } .a .ptitle b { color: #ff7b72; } .b .ptitle b { color: #56d48f; }
+  .ptitle span { display: block; color: #9fb0bf; font-size: 11.5px; margin-top: 1px; }
+  .inset { position: absolute; right: 8px; bottom: 8px; width: 300px; height: 226px; border: 1px solid rgba(255,255,255,.35); border-radius: 4px; }
+  .inset i { position: absolute; left: 4px; top: 2px; font-size: 11px; font-style: normal; color: #cdd6df; background: rgba(0,0,0,.45); padding: 0 4px; }
+  .stats { position: absolute; top: 440px; width: 628px; height: 92px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .stats.a { left: 8px; } .stats.b { left: 644px; }
+  .tile { background: #111821; border: 1px solid #223; border-radius: 6px; padding: 6px 8px; }
+  .tile .k { font-size: 10.5px; color: #8b98a5; text-transform: uppercase; letter-spacing: .4px; }
+  .tile .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .s { font-size: 10.5px; color: #8b98a5; }
+  .meter { height: 5px; background: #223; border-radius: 3px; margin-top: 4px; overflow: hidden; }
+  .meter div { height: 100%; }
+  .bad { color: #ff7b72; } .good { color: #56d48f; } .warn { color: #e3b341; }
+  #chart { position: absolute; left: 8px; top: 538px; }
+  .legend { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; display: flex; gap: 16px; align-items: center; padding: 0 14px; font-size: 11px; color: #8b98a5; background: #0b0f14; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 4px; }
+  .card { position: absolute; inset: 0; background: #0b0f14; display: none; padding: 60px 80px; }
+  .card h2 { font-size: 34px; margin: 0 0 6px; } .card h3 { font-size: 19px; color: #9fb0bf; font-weight: 400; margin: 0 0 28px; }
+  .card ul { font-size: 19px; line-height: 1.6; padding-left: 22px; margin: 0; } .card li b { color: #fff; }
+  .card .foot { position: absolute; left: 80px; right: 80px; bottom: 40px; font-size: 14px; color: #8b98a5; }
+  .card table { border-collapse: collapse; font-size: 18px; margin-top: 8px; }
+  .card td, .card th { padding: 7px 16px; border-bottom: 1px solid #223; text-align: left; font-variant-numeric: tabular-nums; }
+  .card th { color: #8b98a5; font-weight: 400; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="gl" width="1280" height="720"></canvas>
+  <div class="bar">
+    <h1>32-player colocated MR: head + hand sync</h1>
+    <span class="sim">Simulation · one player's view · <b style="color:#c9cfd5">grey = real person</b> (passthrough) · <b style="color:#7cc4ff">colour = network avatar</b></span>
+    <span id="phase" class="phase">Normal Wi-Fi</span>
+    <span id="clock" class="clock">0.0 s</span>
+  </div>
+  <div class="panel a"><div class="ptitle"><b>Naive</b><span>3 full-float transforms / player · every tick to everyone · 67 ms interpolation</span></div><div class="inset"><i>close-up: one player</i></div></div>
+  <div class="panel b"><div class="ptitle"><b>Optimized</b><span>1 packed 30 B avatar · per-viewer send rate · predicted to the present</span></div><div class="inset"><i>close-up: one player</i></div></div>
+  <div class="stats a" id="statsA"></div>
+  <div class="stats b" id="statsB"></div>
+  <canvas id="chart" width="1264" height="152"></canvas>
+  <div class="legend">
+    <span><span class="sw" style="background:#ff7b72"></span>Naive hand error p95</span>
+    <span><span class="sw" style="background:#56d48f"></span>Optimized hand error p95</span>
+    <span><span class="sw" style="background:#ff7b72;opacity:.35"></span>/<span class="sw" style="background:#56d48f;opacity:.35"></span>host upload (Mbps)</span>
+    <span style="margin-left:auto">Errors: all 31 viewers, players in view, vs the real tracked pose · Wi-Fi capacities are assumptions</span>
+  </div>
+  <div class="card" id="intro"></div>
+  <div class="card" id="outro"></div>
+</div>
+
+<script type="importmap">{ "imports": { "three": "https://unpkg.com/three@0.170.0/build/three.module.js" } }</script>
+<script type="module">
+import * as THREE from 'three';
+
+const data = await (await fetch('trace.json')).json();
+const frames = data.frames, rep = data.report;
+const N = frames[0].T.length;
+const VIEWER = 1;
+window.frameCount = frames.length;
+
+// sim is Unity-style (left-handed, +Z forward); flip Z for three.js
+const V = (a, i) => new THREE.Vector3(a[i], a[i + 1], -a[i + 2]);
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl'), antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(1280, 720, false);
+renderer.setScissorTest(true);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1f24);
+scene.fog = new THREE.Fog(0x1a1f24, 14, 26);
+scene.add(new THREE.HemisphereLight(0xdde8f0, 0x2a2622, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(3, 8, 2); scene.add(sun);
+
+// the physical room, as seen through passthrough
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), new THREE.MeshStandardMaterial({ color: 0x3a3f44, roughness: 1 }));
+floor.rotation.x = -Math.PI / 2; scene.add(floor);
+const grid = new THREE.GridHelper(12, 12, 0x5b6670, 0x4a525a); grid.position.y = 0.002; scene.add(grid);
+const wallMat = new THREE.MeshStandardMaterial({ color: 0x4b5157, roughness: 1, side: THREE.DoubleSide });
+for (const [x, z, ry] of [[0, -7, 0], [0, 7, 0], [-7, 0, Math.PI / 2], [7, 0, Math.PI / 2]]) {
+  const w = new THREE.Mesh(new THREE.PlaneGeometry(14, 3), wallMat); w.position.set(x, 1.5, z); w.rotation.y = ry; scene.add(w);
+}
+
+const teamColors = [0x3fa7ff, 0xff9f1a];
+const ghostMat = new THREE.MeshStandardMaterial({ color: 0xb8bec4, transparent: true, opacity: 0.38, roughness: 1, depthWrite: false });
+const errMat = new THREE.LineBasicMaterial({ color: 0xff2d55 });
+
+function makeTruth() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.9, 4, 10), ghostMat); g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 14, 10), ghostMat); g.add(head);
+  const l = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), ghostMat); g.add(l);
+  const r = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), ghostMat); g.add(r);
+  scene.add(g);
+  return { g, body, head, l, r };
+}
+function makeAvatar(team) {
+  const c = teamColors[team];
+  const mat = new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.35, roughness: .5 });
+  const g = new THREE.Group();
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.12, 0.13), mat); g.add(head);
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.06, 0.02), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+  visor.position.set(0, 0, -0.07); head.add(visor);
+  const l = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.11), mat); g.add(l);
+  const r = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.22), mat); g.add(r);
+  const laserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -1)]);
+  const laser = new THREE.Line(laserGeo, new THREE.LineBasicMaterial({ color: c, transparent: true, opacity: .55 }));
+  g.add(laser);
+  const errGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()]);
+  const err = new THREE.LineSegments(errGeo, errMat); scene.add(err);
+  scene.add(g);
+  return { g, head, l, r, laser, err };
+}
+
+const truths = [], avA = [], avB = [];
+for (let i = 0; i < N; i++) { truths.push(makeTruth()); avA.push(makeAvatar(i % 2)); avB.push(makeAvatar(i % 2)); }
+
+function placeTruth(t, a) {
+  const head = V(a, 0), l = V(a, 6), r = V(a, 9);
+  t.head.position.copy(head);
+  t.body.position.set(head.x, Math.max(0.5, (head.y - 0.2) / 2 + 0.05), head.z);
+  t.body.scale.y = Math.max(0.5, (head.y - 0.25) / 1.3);
+  t.l.position.copy(l); t.r.position.copy(r);
+}
+const up = new THREE.Vector3(0, 1, 0), tmp = new THREE.Vector3();
+function orient(obj, pos, fwd) {
+  obj.position.copy(pos);
+  tmp.copy(pos).add(fwd); obj.up.copy(up); obj.lookAt(tmp);
+  obj.rotateY(Math.PI); // boxes face -Z
+}
+function placeAvatar(av, a, truthArr) {
+  if (!a) { av.g.visible = false; av.err.visible = false; return; }
+  av.g.visible = true;
+  const head = V(a, 0), hf = V(a, 3), l = V(a, 6), r = V(a, 9), rf = V(a, 12);
+  orient(av.head, head, hf);
+  av.l.position.copy(l); av.l.quaternion.copy(av.head.quaternion);
+  orient(av.r, r, rf);
+  const end = r.clone().addScaledVector(rf, 1.2);
+  av.laser.geometry.setFromPoints([r, end]);
+  // red line from the real hand/head to where the network says it is
+  const pts = [V(truthArr, 0), head, V(truthArr, 6), l, V(truthArr, 9), r];
+  av.err.geometry.setFromPoints(pts);
+  av.err.visible = true;
+}
+
+const camMain = new THREE.PerspectiveCamera(62, 628 / 384, 0.05, 60);
+const camInset = new THREE.PerspectiveCamera(42, 300 / 226, 0.05, 30);
+let camYaw = null;
+let insetSubject = -1, insetUntil = -1;
+
+function viewport(x, y, w, h, cam) {
+  const yy = 720 - y - h;
+  renderer.setViewport(x, yy, w, h); renderer.setScissor(x, yy, w, h);
+  renderer.render(scene, cam);
+}
+
+// ------- stats & chart --------
+const sec = s => Math.floor(s);
+const perSec = {}; for (const r of rep.PerSecond) perSec[r.Pipeline + r.Second] = r;
+const errSec = {}; for (const r of rep.ErrorPerSecond) errSec[r.Pipeline + r.Receiver + r.Second] = r;
+const phases = rep.Phases;
+const phaseAt = s => phases.find(p => s < p.End) || phases[phases.length - 1];
+const A = { pipe: 'naive', recv: 'interp' }, B = { pipe: 'optimized', recv: 'predict' };
+
+function tile(k, v, s, cls, meter) {
+  return `<div class="tile"><div class="k">${k}</div><div class="v ${cls || ''}">${v}</div>${meter != null ? `<div class="meter"><div style="width:${Math.min(100, meter * 100)}%;background:${meter > 1 ? '#ff7b72' : meter > .7 ? '#e3b341' : '#56d48f'}"></div></div>` : ''}<div class="s">${s}</div></div>`;
+}
+function statsHtml(which, s) {
+  const ph = phaseAt(s);
+  const n = perSec[which.pipe + sec(s)] || {}; const e = errSec[which.pipe + which.recv + sec(s)] || {};
+  const load = (n.HostMbps || 0) / ph.HostUplinkMbps;
+  const hand = e.HandP95 ?? NaN, aim = e.AimP95 ?? NaN;
+  const c = (v, g, b) => v <= g ? 'good' : v <= b ? 'warn' : 'bad';
+  return tile('Host upload', `${(n.HostMbps || 0).toFixed(1)} Mbps`, `of ${ph.HostUplinkMbps} Mbps (assumed)`, load > 1 ? 'bad' : '', load)
+    + tile('Queue delay / dropped', `${(n.QueueDelayMs || 0).toFixed(0)} ms`, `${((n.DropRate || 0) * 100).toFixed(0)}% of packets dropped`, c(n.QueueDelayMs || 0, 20, 80))
+    + tile('Hand error p95', `${hand.toFixed(1)} cm`, `p50 ${(e.HandP50 ?? NaN).toFixed(1)} cm · vs real hand`, c(hand, 12, 30))
+    + tile('Gun aim error p95', `${aim.toFixed(0)}°`, `where the laser points`, c(aim, 15, 30));
+}
+
+const chart = document.getElementById('chart'), ctx = chart.getContext('2d');
+const t0 = frames[0].t / 1000, t1 = frames[frames.length - 1].t / 1000;
+function drawChart(now) {
+  const W = chart.width, H = chart.height, L = 44, R = 44, T = 10, Bt = 20;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#111821'; ctx.fillRect(0, 0, W, H);
+  const x = s => L + (s - t0) / (t1 - t0) * (W - L - R);
+  const maxErr = 100, maxMbps = 30;
+  const ye = v => T + (1 - Math.min(v, maxErr) / maxErr) * (H - T - Bt);
+  const ym = v => T + (1 - Math.min(v, maxMbps) / maxMbps) * (H - T - Bt);
+  for (const p of phases) {
+    const a = Math.max(p.Start, t0), b = Math.min(p.End, t1); if (b <= a) continue;
+    ctx.fillStyle = p.Bursts ? 'rgba(168,50,45,.18)' : p.HostUplinkMbps < 30 ? 'rgba(154,106,0,.16)' : 'rgba(31,111,67,.10)';
+    ctx.fillRect(x(a), T, x(b) - x(a), H - T - Bt);
+    ctx.fillStyle = '#8b98a5'; ctx.font = '10.5px DejaVu Sans'; ctx.fillText(p.Name, x(a) + 4, H - 6);
+  }
+  ctx.strokeStyle = '#2a3440'; ctx.lineWidth = 1; ctx.fillStyle = '#8b98a5'; ctx.font = '10px DejaVu Sans';
+  for (const v of [0, 25, 50, 75, 100]) { ctx.beginPath(); ctx.moveTo(L, ye(v)); ctx.lineTo(W - R, ye(v)); ctx.stroke(); ctx.fillText(v + ' cm', 4, ye(v) + 3); }
+  for (const v of [0, 10, 20, 30]) ctx.fillText(v + ' Mb', W - R + 4, ym(v) + 3);
+  const line = (key, get, y, color, width, dash) => {
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash || []); ctx.beginPath(); let started = false;
+    for (let s = Math.ceil(t0); s <= Math.min(now, t1); s++) {
+      const r = get(s); if (r == null || isNaN(r)) continue;
+      const px = x(Math.min(s + 0.5, now)), py = y(r);
+      if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  };
+  line('mA', s => perSec['naive' + s]?.HostMbps, ym, 'rgba(255,123,114,.45)', 1.5, [4, 3]);
+  line('mB', s => perSec['optimized' + s]?.HostMbps, ym, 'rgba(86,212,143,.45)', 1.5, [4, 3]);
+  line('eA', s => errSec['naiveinterp' + s]?.HandP95, ye, '#ff7b72', 2.5);
+  line('eB', s => errSec['optimizedpredict' + s]?.HandP95, ye, '#56d48f', 2.5);
+  ctx.strokeStyle = '#e6edf3'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x(now), T); ctx.lineTo(x(now), H - Bt); ctx.stroke();
+}
+
+window.renderFrame = (i) => {
+  const f = frames[i];
+  const s = f.t / 1000;
+  for (let p = 0; p < N; p++) {
+    const tr = f.T[p];
+    truths[p].g.visible = p !== VIEWER;
+    placeTruth(truths[p], tr);
+    placeAvatar(avA[p], p === VIEWER ? null : f.A[p], tr);
+    placeAvatar(avB[p], p === VIEWER ? null : f.B[p], tr);
+  }
+  // viewer camera: player 1's real head, yaw smoothed so the video isn't shaky
+  const vh = f.T[VIEWER], head = V(vh, 0), fwd = V(vh, 3);
+  const yaw = Math.atan2(fwd.x, -fwd.z);
+  if (camYaw == null) camYaw = yaw; else camYaw += Math.atan2(Math.sin(yaw - camYaw), Math.cos(yaw - camYaw)) * 0.06;
+  camMain.position.copy(head);
+  camMain.lookAt(head.x + Math.sin(camYaw), head.y - 0.07, head.z - Math.cos(camYaw));
+
+  // close-up: a moving player 1.5-6 m in front of the viewer, re-picked every 5 s
+  if (s >= insetUntil || insetSubject < 0) {
+    let best = -1, bs = -1;
+    const prev = frames[Math.max(0, i - 3)];
+    for (let p = 0; p < N; p++) {
+      if (p === VIEWER) continue;
+      const h = V(f.T[p], 0); const d = h.distanceTo(head);
+      const dir = h.clone().sub(head).normalize();
+      if (dir.x * Math.sin(camYaw) - dir.z * Math.cos(camYaw) < 0.75 || d < 1.5 || d > 6) continue;
+      const speed = h.distanceTo(V(prev.T[p], 0)) + V(f.T[p], 9).distanceTo(V(prev.T[p], 9));
+      if (speed > bs) { bs = speed; best = p; }
+    }
+    if (best >= 0) { insetSubject = best; insetUntil = s + 5; }
+  }
+  if (insetSubject >= 0) {
+    const sh = V(f.T[insetSubject], 0);
+    const dir = head.clone().sub(sh).setY(0).normalize();
+    const side = new THREE.Vector3(-dir.z, 0, dir.x);
+    camInset.position.copy(sh).addScaledVector(dir, 2.2).addScaledVector(side, 0.5).setY(sh.y + 0.1);
+    camInset.lookAt(sh.x, sh.y - 0.3, sh.z);
+  }
+
+  renderer.setScissorTest(true);
+  renderer.setClearColor(0x0b0f14); renderer.setViewport(0, 0, 1280, 720); renderer.setScissor(0, 0, 1280, 720); renderer.clear();
+  for (const [which, x0] of [['A', 10], ['B', 646]]) {
+    for (let p = 0; p < N; p++) {
+      const showA = which === 'A' && p !== VIEWER && f.A[p], showB = which === 'B' && p !== VIEWER && f.B[p];
+      avA[p].g.visible = avA[p].err.visible = !!showA;
+      avB[p].g.visible = avB[p].err.visible = !!showB;
+    }
+    viewport(x0, 54, 628, 384, camMain);
+    if (insetSubject >= 0) {
+      // close-up shows only the subject: real person + its network avatar
+      const keep = [];
+      for (let p = 0; p < N; p++) {
+        if (p === insetSubject) continue;
+        for (const o of [truths[p].g, avA[p].g, avA[p].err, avB[p].g, avB[p].err]) if (o.visible) { keep.push(o); o.visible = false; }
+      }
+      scene.fog.near = 30; scene.fog.far = 60;
+      viewport(x0 + 628 - 8 - 300 + 1, 54 + 384 - 8 - 226 + 1, 298, 224, camInset);
+      scene.fog.near = 14; scene.fog.far = 26;
+      for (const o of keep) o.visible = true;
+    }
+  }
+
+  const ph = phaseAt(s);
+  const pe = document.getElementById('phase');
+  pe.textContent = ph.Name;
+  pe.className = 'phase' + (ph.Bursts ? ' burst' : ph.HostUplinkMbps < 30 ? ' busy' : '');
+  document.getElementById('clock').textContent = s.toFixed(1) + ' s';
+  document.getElementById('statsA').innerHTML = statsHtml(A, s);
+  document.getElementById('statsB').innerHTML = statsHtml(B, s);
+  drawChart(s);
+};
+
+// ------- intro / outro cards -------
+const row = (pipe, recv, ph) => rep.Errors.find(e => e.Pipeline === pipe && e.Receiver === recv && e.Phase === ph);
+const net = (pipe, ph) => rep.Network.find(e => e.Pipeline === pipe && e.Phase === ph);
+document.getElementById('intro').innerHTML = `
+  <h2>32 players, one room, Quest 3 / Pico</h2>
+  <h3>Network sync for head + controller avatars in co-located mixed reality</h3>
+  <ul>
+    <li><b>Bandwidth:</b> one bit-packed 30-byte avatar record (head + both hands) instead of three 36-byte transforms (108 B)</li>
+    <li><b>Relevancy:</b> per-viewer send rates: full rate for players in front of you, lower rate for players behind you</li>
+    <li><b>Prediction:</b> remote heads/hands predicted to the present, so the avatar sits on the real person you see through passthrough</li>
+    <li><b>Stability:</b> late/out-of-order packets ignored, extrapolation bounded, corrections blended (no pops)</li>
+  </ul>
+  <div class="foot">Simulation of 32 players with a headset relaying (like NGO DAHost) over modelled venue Wi-Fi. Core library in plain C# (netstandard2.1, no engine dependency, not yet run inside Unity) + simulator + unit tests.
+  Rendered in three.js, not headset footage. Wi-Fi capacities are assumptions, shown on screen.</div>`;
+const ph1 = 'Normal Wi-Fi', ph2 = 'Busy venue Wi-Fi', ph3 = 'Busy + interference bursts';
+const f1 = v => v.toFixed(1);
+document.getElementById('outro').innerHTML = `
+  <h2>Results</h2>
+  <h3>31 viewers × players in view, error vs the real tracked pose at render time</h3>
+  <table>
+    <tr><th></th><th>Host upload</th><th>Hands p50 / p95, normal</th><th>Hands p50 / p95, busy Wi-Fi</th><th>Hands p95, interference</th></tr>
+    <tr><td class="bad">Naive</td><td>${f1(net('naive', ph1).HostMbps)} Mbps</td><td>${f1(row('naive','interp',ph1).HandP50)} / ${f1(row('naive','interp',ph1).HandP95)} cm</td><td>${f1(row('naive','interp',ph2).HandP50)} / ${f1(row('naive','interp',ph2).HandP95)} cm</td><td>${f1(row('naive','interp',ph3).HandP95)} cm</td></tr>
+    <tr><td class="good">Optimized</td><td>${f1(net('optimized', ph1).HostMbps)} Mbps</td><td>${f1(row('optimized','predict',ph1).HandP50)} / ${f1(row('optimized','predict',ph1).HandP95)} cm</td><td>${f1(row('optimized','predict',ph2).HandP50)} / ${f1(row('optimized','predict',ph2).HandP95)} cm</td><td>${f1(row('optimized','predict',ph3).HandP95)} cm</td></tr>
+  </table>
+  <ul style="margin-top:26px;font-size:17px">
+    <li>Naive overflows a ${net('naive', ph2).AssumedCapacityMbps} Mbps host link: ${(net('naive', ph2).QueueDropRate * 100).toFixed(0)}% of packets dropped, ${net('naive', ph2).QueueDelayMs.toFixed(0)} ms queueing</li>
+    <li>Optimized uses ${(100 - net('optimized', ph1).HostMbps / net('naive', ph1).HostMbps * 100).toFixed(0)}% less upload and never queues</li>
+    <li>Next on real hardware: measure on Quest 3 + Pico, tune tick/send rates per headset, colocation anchor drift</li>
+  </ul>
+  <div class="foot">Synthetic laser-tag motion (springs, recoil, sprints). Real tracking data is noisier; prediction gains there need measuring on device.</div>`;
+window.showCard = (id) => { document.getElementById(id).style.display = 'block'; };
+window.viewerReady = true;
+</script>
+</body>
+</html>
