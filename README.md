@@ -2,6 +2,8 @@
 
 Head + controller avatar sync for **co-located mixed reality with 32 players** (Quest 3 / Pico, one room, one Wi-Fi network).
 
+**Demo video (73 s, simulation):** https://leads.realalma.com/downloads/05d864e593cf4840652a3800dd99d8a9/xr-colocated-netsync-demo.mp4
+
 In co-located MR you can see the real person through passthrough, so any network delay shows up as the avatar (gun, hands, hitbox) trailing the body. And 32 headsets on one access point means the relay's Wi-Fi uplink is the bottleneck. This repo is a plain C# library for both problems, plus a simulator that measures them.
 
 - `src/XrNetSync/`: the library. netstandard2.1 / C# 9, no engine dependency, ships an `.asmdef` (`noEngineReferences`) so it can be dropped into a Unity project. **It has not been compiled or run inside Unity yet.**
